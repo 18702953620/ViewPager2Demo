@@ -1,0 +1,212 @@
+6.0 `showAsDropDown`方法
+```java
+    public void showAsDropDown(View anchor, int xoff, int yoff, int gravity) {
+        if (isShowing() || mContentView == null) {
+            return;
+        }
+
+        TransitionManager.endTransitions(mDecorView);
+
+        registerForScrollChanged(anchor, xoff, yoff, gravity);
+
+        mIsShowing = true;
+        mIsDropdown = true;
+
+        final WindowManager.LayoutParams p = createPopupLayoutParams(anchor.getWindowToken());
+        preparePopup(p);
+
+        final boolean aboveAnchor = findDropDownPosition(anchor, p, xoff, yoff, gravity);
+        updateAboveAnchor(aboveAnchor);
+
+        invokePopup(p);
+    }
+```
+我们先看`invokePopup`方法
+```java
+    /**
+     * <p>Invoke the popup window by adding the content view to the window
+     * manager.</p>
+     *
+     * <p>The content view must be non-null when this method is invoked.</p>
+     *
+     * @param p the layout parameters of the popup's content view
+     */
+    private void invokePopup(WindowManager.LayoutParams p) {
+        if (mContext != null) {
+            p.packageName = mContext.getPackageName();
+        }
+
+        final PopupDecorView decorView = mDecorView;
+        decorView.setFitsSystemWindows(mLayoutInsetDecor);
+
+        setLayoutDirectionFromAnchor();
+
+        mWindowManager.addView(decorView, p);
+
+        if (mEnterTransition != null) {
+            decorView.requestEnterTransition(mEnterTransition);
+        }
+    }
+```
+可以看到,是在这里将`PopupWindow`添加到`WindowManager`,而其中的`p`即`WindowManager.LayoutParams`则是描述其位置信息。
+我们往回翻，可以找到`LayoutParams`是在`createPopupLayoutParams`中创建的
+`createPopupLayoutParams`方法如下
+```java
+    /**
+     * <p>Generate the layout parameters for the popup window.</p>
+     *
+     * @param token the window token used to bind the popup's window
+     *
+     * @return the layout parameters to pass to the window manager
+     */
+    private WindowManager.LayoutParams createPopupLayoutParams(IBinder token) {
+        final WindowManager.LayoutParams p = new WindowManager.LayoutParams();
+
+        // These gravity settings put the view at the top left corner of the
+        // screen. The view is then positioned to the appropriate location by
+        // setting the x and y offsets to match the anchor's bottom-left
+        // corner.
+        p.gravity = Gravity.START | Gravity.TOP;
+        p.flags = computeFlags(p.flags);
+        p.type = mWindowLayoutType;
+        p.token = token;
+        p.softInputMode = mSoftInputMode;
+        p.windowAnimations = computeAnimationResource();
+
+        if (mBackground != null) {
+            p.format = mBackground.getOpacity();
+        } else {
+            p.format = PixelFormat.TRANSLUCENT;
+        }
+
+        if (mHeightMode < 0) {
+            p.height = mLastHeight = mHeightMode;
+        } else {
+            p.height = mLastHeight = mHeight;
+        }
+
+        if (mWidthMode < 0) {
+            p.width = mLastWidth = mWidthMode;
+        } else {
+            p.width = mLastWidth = mWidth;
+        }
+
+        // Used for debugging.
+        p.setTitle("PopupWindow:" + Integer.toHexString(hashCode()));
+
+        return p;
+    }
+```
+这里创建了`LayoutParams`,但是并没有对其位置即`x、y`做处理，再看看`findDropDownPosition`方法
+```java
+ /**
+     * Positions the popup window on screen. When the popup window is too tall
+     * to fit under the anchor, a parent scroll view is seeked and scrolled up
+     * to reclaim space. If scrolling is not possible or not enough, the popup
+     * window gets moved on top of the anchor.
+     * <p>
+     * The height must have been set on the layout parameters prior to calling
+     * this method.
+     *
+     * @param anchor the view on which the popup window must be anchored
+     * @param p the layout parameters used to display the drop down
+     * @param xoff horizontal offset used to adjust for background padding
+     * @param yoff vertical offset used to adjust for background padding
+     * @param gravity horizontal gravity specifying popup alignment
+     * @return true if the popup is translated upwards to fit on screen
+     */
+    private boolean findDropDownPosition(View anchor, WindowManager.LayoutParams p, int xoff,
+            int yoff, int gravity) {
+        final int anchorHeight = anchor.getHeight();
+        final int anchorWidth = anchor.getWidth();
+        if (mOverlapAnchor) {
+            yoff -= anchorHeight;
+        }
+
+        anchor.getLocationInWindow(mDrawingLocation);
+        p.x = mDrawingLocation[0] + xoff;
+        p.y = mDrawingLocation[1] + anchorHeight + yoff;
+
+        final int hgrav = Gravity.getAbsoluteGravity(gravity, anchor.getLayoutDirection())
+                & Gravity.HORIZONTAL_GRAVITY_MASK;
+        if (hgrav == Gravity.RIGHT) {
+            // Flip the location to align the right sides of the popup and
+            // anchor instead of left.
+            p.x -= mPopupWidth - anchorWidth;
+        }
+
+        boolean onTop = false;
+
+        p.gravity = Gravity.LEFT | Gravity.TOP;
+
+        anchor.getLocationOnScreen(mScreenLocation);
+        final Rect displayFrame = new Rect();
+        anchor.getWindowVisibleDisplayFrame(displayFrame);
+
+        final int screenY = mScreenLocation[1] + anchorHeight + yoff;
+        final View root = anchor.getRootView();
+        if (screenY + mPopupHeight > displayFrame.bottom
+                || p.x + mPopupWidth - root.getWidth() > 0) {
+            // If the drop down disappears at the bottom of the screen, we try
+            // to scroll a parent scrollview or move the drop down back up on
+            // top of the edit box.
+            if (mAllowScrollingAnchorParent) {
+                final int scrollX = anchor.getScrollX();
+                final int scrollY = anchor.getScrollY();
+                final Rect r = new Rect(scrollX, scrollY, scrollX + mPopupWidth + xoff,
+                        scrollY + mPopupHeight + anchorHeight + yoff);
+                anchor.requestRectangleOnScreen(r, true);
+            }
+
+            // Now we re-evaluate the space available, and decide from that
+            // whether the pop-up will go above or below the anchor.
+            anchor.getLocationInWindow(mDrawingLocation);
+            p.x = mDrawingLocation[0] + xoff;
+            p.y = mDrawingLocation[1] + anchorHeight + yoff;
+
+            // Preserve the gravity adjustment.
+            if (hgrav == Gravity.RIGHT) {
+                p.x -= mPopupWidth - anchorWidth;
+            }
+
+            // Determine whether there is more space above or below the anchor.
+            anchor.getLocationOnScreen(mScreenLocation);
+            onTop = (displayFrame.bottom - mScreenLocation[1] - anchorHeight - yoff) <
+                    (mScreenLocation[1] - yoff - displayFrame.top);
+            if (onTop) {
+                p.gravity = Gravity.LEFT | Gravity.BOTTOM;
+                p.y = root.getHeight() - mDrawingLocation[1] + yoff;
+            } else {
+                p.y = mDrawingLocation[1] + anchorHeight + yoff;
+            }
+        }
+
+        if (mClipToScreen) {
+            final int displayFrameWidth = displayFrame.right - displayFrame.left;
+            final int right = p.x + p.width;
+            if (right > displayFrameWidth) {
+                p.x -= right - displayFrameWidth;
+            }
+
+            if (p.x < displayFrame.left) {
+                p.x = displayFrame.left;
+                p.width = Math.min(p.width, displayFrameWidth);
+            }
+
+            if (onTop) {
+                final int popupTop = mScreenLocation[1] + yoff - mPopupHeight;
+                if (popupTop < 0) {
+                    p.y += popupTop;
+                }
+            } else {
+                p.y = Math.max(p.y, displayFrame.top);
+            }
+        }
+
+        p.gravity |= Gravity.DISPLAY_CLIP_VERTICAL;
+
+        return onTop;
+    }
+```
+第一次赋值是在`p.y = mDrawingLocation[1] + anchorHeight + yoff;`,其中，`mDrawingLocation`为`anchor.getLocationInWindow(mDrawingLocation);`
+即窗口中的位置（没有弹窗时等于屏幕中的位置），坐标点为控件或者布局的左上方，所以，此时的`PopupWindow`的位置是在`anchor`的下方，再加上`yoff`y方向的偏移量

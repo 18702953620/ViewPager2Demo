@@ -1,0 +1,357 @@
+ViewPager2
+
+### 实现原理
+首先来看下其初始化
+```java
+ private void initialize(Context context, AttributeSet attrs) {
+      ...省略...
+        mRecyclerView = new RecyclerViewImpl(context);
+        mRecyclerView.setId(ViewCompat.generateViewId());
+        mRecyclerView.setDescendantFocusability(FOCUS_BEFORE_DESCENDANTS);
+
+        mLayoutManager = new LinearLayoutManagerImpl(context);
+        mRecyclerView.setLayoutManager(mLayoutManager);
+        mRecyclerView.setScrollingTouchSlop(RecyclerView.TOUCH_SLOP_PAGING);
+        setOrientation(context, attrs);
+
+        mRecyclerView.setLayoutParams(
+                new ViewGroup.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        mRecyclerView.addOnChildAttachStateChangeListener(enforceChildFillListener());
+
+        // Create ScrollEventAdapter before attaching PagerSnapHelper to RecyclerView, because the
+        // attach process calls PagerSnapHelperImpl.findSnapView, which uses the mScrollEventAdapter
+        mScrollEventAdapter = new ScrollEventAdapter(this);
+        // Create FakeDrag before attaching PagerSnapHelper, same reason as above
+        mFakeDragger = new FakeDrag(this, mScrollEventAdapter, mRecyclerView);
+        mPagerSnapHelper = new PagerSnapHelperImpl();
+        mPagerSnapHelper.attachToRecyclerView(mRecyclerView);
+        ...省略...
+    }
+```
+看到`RecyclerView`、`LinearLayoutManager`、`PagerSnapHelper`是不是有点熟悉？详情可点击[【Android 进阶】仿抖音系列之翻页上下滑切换视频（四）](https://www.jianshu.com/p/e0bd595d6321)
+其使用方式前文中已有详情描述，这里不再赘述。
+
+### 基本使用
+
+#### 添加依赖
+
+`implementation "androidx.viewpager2:viewpager2:1.0.0"`
+
+#### 布局中引入
+
+```xml
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/vpBase"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+```
+#### Adapter
+由于ViewPager2 基于`RecyclerView`实现，所以`Adapter`应继承于`RecyclerView.Adapter`
+```java
+public class BaseAdapter extends RecyclerView.Adapter<BaseAdapter.MyViewHolder> {
+
+
+    @NonNull
+    @Override
+    public MyViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.fm_demo, parent, false);
+        return new MyViewHolder(view);
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull MyViewHolder holder, int position) {
+        int color = Color.parseColor(randomHexStr(6));
+        holder.tvDemo.setBackgroundColor(color);
+    }
+
+    @Override
+    public int getItemCount() {
+        return 10;
+    }
+
+
+    class MyViewHolder extends RecyclerView.ViewHolder {
+        private TextView tvDemo;
+
+        public MyViewHolder(@NonNull View itemView) {
+            super(itemView);
+
+            tvDemo = itemView.findViewById(R.id.tvDemo);
+        }
+    }
+   }
+```
+
+#### 使用
+```java
+        BaseAdapter baseAdapter = new BaseAdapter();
+        vpBase.setAdapter(baseAdapter);
+```
+#### 滑动方向
+通过 `setOrientation`方法设置，可设置水平`ORIENTATION_HORIZONTAL`和垂直`ORIENTATION_VERTICAL`
+```java
+   public void setOrientation(@Orientation int orientation) {
+        mLayoutManager.setOrientation(orientation);
+        mAccessibilityProvider.onSetOrientation();
+    }
+```
+可见，其原理是设置`LayoutManager`的方向
+
+#### 滑动监听
+通过设置`registerOnPageChangeCallback`方法
+```java
+    public void registerOnPageChangeCallback(@NonNull OnPageChangeCallback callback) {
+        mExternalPageChangeCallbacks.addOnPageChangeCallback(callback);
+    }
+```
+而`mExternalPageChangeCallbacks` 在初始化时，被添加到`mPageChangeEventDispatcher`
+
+`mPageChangeEventDispatcher.addOnPageChangeCallback(mExternalPageChangeCallbacks);`
+
+`mPageChangeEventDispatcher` 又被设置给`mScrollEventAdapter`
+
+`mScrollEventAdapter.setOnPageChangeCallback(mPageChangeEventDispatcher);`
+`mScrollEventAdapter`则继承于`RecyclerView.OnScrollListener`
+`ScrollEventAdapter extends RecyclerView.OnScrollListener`
+
+
+#### 禁止滑动
+通过`setUserInputEnabled`方法
+
+#### 预加载
+通过`setOffscreenPageLimit`方法
+```java
+    /**
+     * <p>Set the number of pages that should be retained to either side of the currently visible
+     * page(s). Pages beyond this limit will be recreated from the adapter when needed. Set this to
+     * {@link #OFFSCREEN_PAGE_LIMIT_DEFAULT} to use RecyclerView's caching strategy. The given value
+     * must either be larger than 0, or {@code #OFFSCREEN_PAGE_LIMIT_DEFAULT}.</p>
+     *
+     * <p>Pages within {@code limit} pages away from the current page are created and added to the
+     * view hierarchy, even though they are not visible on the screen. Pages outside this limit will
+     * be removed from the view hierarchy, but the {@code ViewHolder}s will be recycled as usual by
+     * {@link RecyclerView}.</p>
+     *
+     * <p>This is offered as an optimization. If you know in advance the number of pages you will
+     * need to support or have lazy-loading mechanisms in place on your pages, tweaking this setting
+     * can have benefits in perceived smoothness of paging animations and interaction. If you have a
+     * small number of pages (3-4) that you can keep active all at once, less time will be spent in
+     * layout for newly created view subtrees as the user pages back and forth.</p>
+     *
+     * <p>You should keep this limit low, especially if your pages have complex layouts. By default
+     * it is set to {@code OFFSCREEN_PAGE_LIMIT_DEFAULT}.</p>
+     *
+     * @param limit How many pages will be kept offscreen on either side. Valid values are all
+     *        values {@code >= 1} and {@link #OFFSCREEN_PAGE_LIMIT_DEFAULT}
+     * @throws IllegalArgumentException If the given limit is invalid
+     * @see #getOffscreenPageLimit()
+     */
+    public void setOffscreenPageLimit(@OffscreenPageLimit int limit) {
+        if (limit < 1 && limit != OFFSCREEN_PAGE_LIMIT_DEFAULT) {
+            throw new IllegalArgumentException(
+                    "Offscreen page limit must be OFFSCREEN_PAGE_LIMIT_DEFAULT or a number > 0");
+        }
+        mOffscreenPageLimit = limit;
+        // Trigger layout so prefetch happens through getExtraLayoutSize()
+        mRecyclerView.requestLayout();
+    }
+```
+其中`OFFSCREEN_PAGE_LIMIT_DEFAULT`默认为`-1`,如果不设置，默认使用`RecyclerView`的缓存机制，详细点击查看[【Android进阶】RecyclerView之缓存（二）](https://www.jianshu.com/p/427c7b0c05cc)
+如果设置为大于的数，则会预加载`limit`个
+
+### PageTransformer
+`ViewPager2`延续了`ViewPager`中的PageTransformer，内置的有`MarginPageTransformer`和`CompositePageTransformer`
+
+使用方式如下：
+```java
+        BaseAdapter baseAdapter = new BaseAdapter();
+        vpBase.setPageTransformer(new MarginPageTransformer(DensityUtils.dp2px(this, 20)));
+        vpBase.setAdapter(baseAdapter);
+```
+当然，我们也可以自己实现，只需要实现`ViewPager2.PageTransformer`
+
+```java
+    class ScalePageTransformer implements ViewPager2.PageTransformer {
+        private static final float DEFAULT_MIN_SCALE = 0.85f;
+        private static final float DEFAULT_CENTER = 0.5f;
+        private float mMinScale = DEFAULT_MIN_SCALE;
+
+        @Override
+        public void transformPage(@NonNull View view, float position) {
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                view.setElevation(-Math.abs(position));
+            }
+
+            int pageWidth = view.getWidth();
+            int pageHeight = view.getHeight();
+
+            view.setPivotY(pageHeight / 2);
+            view.setPivotX(pageWidth / 2);
+            if (position < -1) {
+                view.setScaleX(mMinScale);
+                view.setScaleY(mMinScale);
+                view.setPivotX(pageWidth);
+            } else if (position <= 1) {
+                if (position < 0) {
+                    float scaleFactor = (1 + position) * (1 - mMinScale) + mMinScale;
+                    view.setScaleX(scaleFactor);
+                    view.setScaleY(scaleFactor);
+                    view.setPivotX(pageWidth * (DEFAULT_CENTER + DEFAULT_CENTER * -position));
+                } else {
+                    float scaleFactor = (1 - position) * (1 - mMinScale) + mMinScale;
+                    view.setScaleX(scaleFactor);
+                    view.setScaleY(scaleFactor);
+                    view.setPivotX(pageWidth * ((1 - position) * DEFAULT_CENTER));
+                }
+            } else {
+                view.setPivotX(0);
+                view.setScaleX(mMinScale);
+                view.setScaleY(mMinScale);
+            }
+        }
+    }
+```
+使用方式如下
+```java
+        BaseAdapter baseAdapter = new BaseAdapter();
+        CompositePageTransformer pageTransformer = new CompositePageTransformer();
+        pageTransformer.addTransformer(new MarginPageTransformer(DensityUtils.dp2px(this, 20)));
+        pageTransformer.addTransformer(new ScalePageTransformer());
+        vpBase.setPageTransformer(pageTransformer);
+        vpBase.setAdapter(baseAdapter);
+```
+
+### Fragment
+`ViewPager2`中使用`Fragment`只需要`Adapter`继承于`FragmentStateAdapter`
+```java
+public class BaseFragmentStateAdapter extends FragmentStateAdapter {
+
+    private List<DemoFragment> fragments;
+
+    public BaseFragmentStateAdapter(@NonNull FragmentActivity fragmentActivity, List<DemoFragment> fragments) {
+        super(fragmentActivity);
+        this.fragments = fragments;
+    }
+
+    public BaseFragmentStateAdapter(@NonNull FragmentActivity fragmentActivity) {
+        super(fragmentActivity);
+    }
+
+    @NonNull
+    @Override
+    public Fragment createFragment(int position) {
+        return fragments.get(position);
+    }
+
+    @Override
+    public int getItemCount() {
+        return fragments == null ? 0 : fragments.size();
+    }
+}
+```
+然后这样使用
+```java
+        fragmentList = new ArrayList<>();
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+        fragmentList.add(new DemoFragment());
+
+        BaseFragmentStateAdapter stateAdapter = new BaseFragmentStateAdapter(this, fragmentList);
+        vpFragment.setAdapter(stateAdapter);
+```
+这样就完了吗？恭喜你，收获内存泄漏一枚
+
+`ArrayList`持有`DemoFragment`的强引用，导致`DemoFragment`无法销毁。
+所以正确的写法是
+```java
+public class TabAdapter extends FragmentStateAdapter {
+    private List<String> titles;
+
+    public TabAdapter(@NonNull FragmentActivity fragmentActivity, List<String> titles) {
+        super(fragmentActivity);
+        this.titles = titles;
+    }
+
+    @NonNull
+    @Override
+    public Fragment createFragment(int position) {
+        return new DemoFragment(titles.get(position));
+    }
+
+    @Override
+    public int getItemCount() {
+        return titles.size();
+    }
+}
+```
+### TabLayout
+`ViewPager2`配合`TabLayout`的联动可以使用`TabLayoutMediator`，记得销毁时，解除绑定`tabLayoutMediator.detach();`
+```java
+        tabLayoutMediator = new TabLayoutMediator(tabLayout, vpTablayout, new TabLayoutMediator.TabConfigurationStrategy() {
+            @Override
+            public void onConfigureTab(@NonNull TabLayout.Tab tab, int position) {
+                tab.setText(titles.get(position));
+            }
+        });
+        tabLayoutMediator.attach();
+```
+
+#### 踩坑
+`TabLayout`使用自定义布局和`ViewPager2`联动时会出现问题，`TabLayout`的自定义效果会无效，关键代码如下
+```java
+  void populateTabsFromPagerAdapter() {
+    tabLayout.removeAllTabs();
+
+    if (adapter != null) {
+      int adapterCount = adapter.getItemCount();
+      for (int i = 0; i < adapterCount; i++) {
+        TabLayout.Tab tab = tabLayout.newTab();
+        tabConfigurationStrategy.onConfigureTab(tab, i);
+        tabLayout.addTab(tab, false);
+      }
+      // Make sure we reflect the currently set ViewPager item
+      if (adapterCount > 0) {
+        int lastItem = tabLayout.getTabCount() - 1;
+        int currItem = Math.min(viewPager.getCurrentItem(), lastItem);
+        if (currItem != tabLayout.getSelectedTabPosition()) {
+          tabLayout.selectTab(tabLayout.getTabAt(currItem));
+        }
+      }
+    }
+  }
+```
+可见，`onConfigureTab`返回的都是`tabLayout.newTab()`,所以，正确的做法是采用最原始的联动
+```java
+ tabLayout.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
+            @Override
+            public void onTabSelected(TabLayout.Tab tab) {
+                vpTablayout.setCurrentItem(tab.getPosition());
+            }
+
+            @Override
+            public void onTabUnselected(TabLayout.Tab tab) {
+
+            }
+
+            @Override
+            public void onTabReselected(TabLayout.Tab tab) {
+
+            }
+        });
+
+        vpTablayout.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+            @Override
+            public void onPageSelected(int position) {
+                tabLayout.selectTab(tabLayout.getTabAt(position));
+            }
+        });
+```
+#### 所涉及到的源码：[ViewPagerDemo](https://github.com/18702953620/ViewPagerDemo)
+
+
